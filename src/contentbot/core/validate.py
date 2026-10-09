@@ -158,6 +158,10 @@ async def validate(project: Project, scenario: Scenario, state: RunState, posts:
         elif chk.type == "block_auto_if":
             if chk.field and state.fields.get(chk.field) == chk.equals:
                 v.block_auto.append(chk.message or f"{chk.field} = {chk.equals}")
+        elif chk.type == "require_review_if":
+            if chk.field and state.fields.get(chk.field) == chk.equals:
+                v.needs_review.append(chk.message or f"{chk.field} = {chk.equals}")
+                v.review_button = v.review_button or chk.review_button
 
     for pname, post in posts.items():
         caps = CAPS[pname]

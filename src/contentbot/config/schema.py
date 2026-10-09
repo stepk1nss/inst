@@ -103,16 +103,18 @@ class StepSpec(Strict):
 
 
 class CheckSpec(Strict):
-    type: Literal["no_secret_leak", "block_auto_if"]
+    type: Literal["no_secret_leak", "block_auto_if", "require_review_if"]
     # no_secret_leak
     secrets: list[str] = Field(default_factory=list)
     options_field: str | None = None
     index_field: str | None = None
     judge: bool = False
-    # block_auto_if
+    # block_auto_if / require_review_if
     field: str | None = None
     equals: Any = None
     message: str = ""
+    # require_review_if: confirmation is locked until a person presses this button
+    review_button: str = "✅ Я проверил"
 
 
 class PlatformDefault(Strict):

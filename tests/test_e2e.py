@@ -42,9 +42,7 @@ def test_uncertain_answer_must_not_be_confirmable(tmp_path, demo_image, demo_fix
     fx = dict(demo_fixtures)
     fx["solve"] = {**fx["solve"], "uncertain": True}
     checks = _run(tmp_path, demo_image, fx)
-    check = checks["неуверенный ответ не считается готовым к публикации"]
-    # documents current behaviour: auto-publish is blocked, but manual confirmation is still possible
-    assert not check.ok and "Подтвердить" in check.detail
+    assert checks["неуверенный ответ не считается готовым к публикации"].ok
 
 
 def test_redact(monkeypatch):

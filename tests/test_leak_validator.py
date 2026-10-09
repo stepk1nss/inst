@@ -65,7 +65,7 @@ def test_uncertain_answer_blocks_auto(tmp_path, demo_image, demo_fixtures):
     state = asyncio.run(pipe.create_run("zazerkalye", [demo_image], scenario_id="pdd_ticket", params={"mode": "auto"}))
     state = asyncio.run(pipe.generate(state))
     assert state.decision == "await_confirm"
-    assert any("не уверена" in b for b in state.validation.block_auto)
+    assert any("не уверена" in r for r in state.validation.needs_review)
 
 
 def test_judge_flag_blocks_auto(tmp_path, demo_image, demo_fixtures):

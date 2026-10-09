@@ -64,6 +64,11 @@ def preview_card(project: Project, state: RunState, tab: str) -> str:
         lines.append(f"⛔ {e(err)}")
     for b in v.block_auto:
         lines.append(f"⚠️ {e(b)}")
+    for r in v.needs_review:
+        if state.review:
+            lines.append(f"🔎 {e(r)} — <b>проверено вручную</b>")
+        else:
+            lines.append(f"🔎 <b>Нужна проверка:</b> {e(r)}. Подтверждение недоступно до проверки.")
     if state.params.get("ingest_note"):
         lines.append(f"ℹ️ {e(state.params['ingest_note'])}")
 
@@ -91,7 +96,9 @@ def preview_card(project: Project, state: RunState, tab: str) -> str:
     return text
 
 
-def preview_keyboard(state: RunState, tab: str, can_revise: bool) -> Keyboard:
+def preview_keyboard(
+    state: RunState, tab: str, can_revise: bool, review_pending: bool = False, can_recheck: bool = False
+) -> Keyboard:
     rid = state.run_id
     tabs = [Button(("• " if p == tab else "") + TAB_LABELS.get(p, p), f"t:{rid}:{p}") for p in state.posts]
     if state.status in ("approved", "cancelled"):
@@ -100,7 +107,13 @@ def preview_keyboard(state: RunState, tab: str, can_revise: bool) -> Keyboard:
     rows.append([Button("🎙 Голос", f"v:{rid}"), Button("✏️ Текст", f"e:{rid}")])
     regen = [Button("🔁 Тексты заново", f"r:{rid}")] if can_revise else []
     rows.append(regen + [Button("🔄 Сценарий", f"sc:{rid}")])
-    rows.append([Button("✅ Подтвердить", f"ok:{rid}"), Button("💾 Черновик", f"d:{rid}"), Button("❌", f"c:{rid}")])
+    if review_pending:
+        # confirm is locked: the person must review first (or fix / re-check)
+        label = state.validation.review_button or "✅ Я проверил"
+        rows.append([Button(label, f"rv:{rid}")] + ([Button("🔁 Перепроверить", f"rs:{rid}")] if can_recheck else []))
+        rows.append([Button("💾 Черновик", f"d:{rid}"), Button("❌", f"c:{rid}")])
+    else:
+        rows.append([Button("✅ Подтвердить", f"ok:{rid}"), Button("💾 Черновик", f"d:{rid}"), Button("❌", f"c:{rid}")])
     return rows
 
 

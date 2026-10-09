@@ -44,7 +44,8 @@ def _print_state(pipeline: Pipeline, state: RunState) -> None:
     if state.last_run_steps:
         print("шаги: " + ", ".join(f"{k}={v}" for k, v in state.last_run_steps.items()))
     v = state.validation
-    for label, items in (("блокирует", v.errors), ("требует подтверждения", v.block_auto), ("предупреждение", v.warnings)):
+    for label, items in (("блокирует", v.errors), ("нужна ручная проверка", v.needs_review),
+                         ("требует подтверждения", v.block_auto), ("предупреждение", v.warnings)):
         for item in items:
             print(f"  [{label}] {item}")
     for pname, post in state.posts.items():

@@ -54,6 +54,8 @@ class PlatformPost(BaseModel):
 class Validation(BaseModel):
     errors: list[str] = Field(default_factory=list)  # block publishing until fixed
     block_auto: list[str] = Field(default_factory=list)  # force manual confirmation
+    needs_review: list[str] = Field(default_factory=list)  # confirmation locked until a person reviews
+    review_button: str = ""
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -79,6 +81,9 @@ class RunState(BaseModel):
     llm_calls: list[dict[str, Any]] = Field(default_factory=list)
     judge_cache: dict[str, list[str]] = Field(default_factory=dict)  # hash(secrets+texts) -> findings
     publish_results: list[dict[str, Any]] = Field(default_factory=list)
+    # manual review of flagged content: {"by": user, "at": ts, "key": hash of the secret fields reviewed}
+    review: dict[str, Any] | None = None
+    events: list[dict[str, Any]] = Field(default_factory=list)  # append-only journal of decisions
     # new | scenario_selected | generating | ready | failed | draft | approved | cancelled
     status: str = "new"
     error: str | None = None

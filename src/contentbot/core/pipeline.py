@@ -27,7 +27,7 @@ from ..llm.base import LLMError
 from ..publishers.base import publish_posts
 from .compose import compose_posts
 from .context import SecretIsolationError, build_view
-from .modes import decide
+from .modes import can_confirm, decide, review_pending
 from .services import Services
 from .state import MediaItem, RunState, RunStore, StepRecord, new_run_id
 from .validate import validate
@@ -142,6 +142,10 @@ class Pipeline:
                 await self._run_step(project, scenario, step.id, state, run_dir)
             state.posts = compose_posts(project, scenario, state, run_dir)
             state.validation = await validate(project, scenario, state, state.posts, self.services)
+            if state.review is not None and not self.is_reviewed(state):
+                # what the person checked has changed (e.g. the answer was regenerated)
+                state.review = None
+                self._event(state, "review_reset", reason="проверенные данные изменились")
             state.decision = decide(state.params.get("mode", project.publishing.mode), state.validation)
             state.status = "ready"
         except (StepError, PipelineError) as e:
@@ -278,27 +282,76 @@ class Pipeline:
 
     # ------------------------------------------------------------------ decisions
 
-    async def approve(self, state: RunState, platforms: list[str] | None = None) -> RunState:
+    # ------------------------------------------------------------------ manual review
+
+    def review_key(self, state: RunState) -> str:
+        """Fingerprint of what a reviewer vouches for: the secret fields (e.g. the answer)."""
+        scenario = self.registry.project(state.project_id).scenarios[state.scenario_id]
+        return _hash({name: state.fields.get(name) for name in sorted(scenario.secret_fields())})
+
+    def is_reviewed(self, state: RunState) -> bool:
+        return state.review is not None and state.review.get("key") == self.review_key(state)
+
+    def can_confirm(self, state: RunState) -> bool:
+        return state.status in ("ready", "draft") and can_confirm(state.validation, self.is_reviewed(state))
+
+    def flagged_step(self, state: RunState) -> str | None:
+        """The step that produced the field which triggered a review (to re-run it)."""
+        scenario = self.registry.project(state.project_id).scenarios[state.scenario_id]
+        fields = [c.field for c in scenario.checks if c.type == "require_review_if" and c.field]
+        for step in scenario.steps:
+            if any(f in step.produces for f in fields):
+                return step.id
+        return None
+
+    def mark_reviewed(self, state: RunState, by: str | int) -> RunState:
+        if state.status not in ("ready", "draft"):
+            raise PipelineError("пост не ждёт проверки")
+        if not state.validation.needs_review:
+            raise PipelineError("этот пост не требует ручной проверки")
+        state.review = {"by": str(by), "at": _now(), "key": self.review_key(state)}
+        self._event(state, "review_confirmed", by=str(by), reasons=list(state.validation.needs_review))
+        self.store.save(state)
+        return state
+
+    @staticmethod
+    def _event(state: RunState, kind: str, **data: Any) -> None:
+        state.events.append({"at": _now(), "type": kind, **data})
+
+    # ------------------------------------------------------------------ confirm
+
+    async def approve(self, state: RunState, platforms: list[str] | None = None, by: str | int = "user") -> RunState:
         """User confirmation. Real publishing is not connected yet: posts go to a dry-run outbox."""
         if state.status not in ("ready", "draft"):
             raise PipelineError("пост ещё не готов")
         if state.validation.errors:
             raise PipelineError("есть ошибки, публикация невозможна:\n" + "\n".join(state.validation.errors))
+        if review_pending(state.validation, self.is_reviewed(state)):
+            raise PipelineError("сначала нужна ручная проверка: " + "; ".join(state.validation.needs_review))
         results = await publish_posts(state.posts, self.store.run_dir(state.run_id), platforms)
         state.publish_results = [r.__dict__ for r in results]
         state.status = "approved"
+        self._event(
+            state, "approved", by=str(by),
+            manual_review=bool(state.validation.needs_review),
+            reviewed_by=state.review["by"] if state.review else None,
+            platforms=[r.platform for r in results if r.ok],
+            dry_run=True,
+        )
         self.store.save(state)
         return state
 
-    def save_draft(self, state: RunState) -> RunState:
+    def save_draft(self, state: RunState, by: str | int = "user") -> RunState:
         if state.status not in ("ready", "draft"):
             raise PipelineError("черновик можно сохранить только у готового поста")
         state.status = "draft"
+        self._event(state, "draft", by=str(by))
         self.store.save(state)
         return state
 
-    def cancel(self, state: RunState) -> RunState:
+    def cancel(self, state: RunState, by: str | int = "user") -> RunState:
         state.status = "cancelled"
+        self._event(state, "cancelled", by=str(by))
         self.store.save(state)
         return state
 

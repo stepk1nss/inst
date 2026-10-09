@@ -114,12 +114,12 @@ def run_checks(pipeline: Pipeline, state: RunState) -> list[Check]:
 
     # 4. uncertainty
     if f.get("uncertain") is True:
-        # "not ready" means it cannot be confirmed at all, not only "no auto-publish"
-        blocked = state.decision != "publish" and bool(state.validation.errors)
+        # "not ready" means it cannot be confirmed until a person reviews it
+        blocked = state.decision != "publish" and not pipeline.can_confirm(state) and bool(state.validation.needs_review)
         checks.append(Check(
             "неуверенный ответ не считается готовым к публикации",
             blocked,
-            "" if blocked else f"решение={state.decision}, но кнопка «Подтвердить» доступна — пост можно подтвердить вручную",
+            "" if blocked else f"решение={state.decision}, но пост можно подтвердить без ручной проверки",
         ))
     else:
         checks.append(Check("модель уверена в ответе (uncertain=false)", True))

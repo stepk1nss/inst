@@ -16,6 +16,7 @@ import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..core.modes import review_pending
 from ..core.pipeline import Pipeline, PipelineError
 from ..core.state import RunState
 from ..media.audio import to_ogg_opus
@@ -113,6 +114,13 @@ class BotController:
     def _spoken_field(self, state: RunState) -> str | None:
         sc = self.registry.project(state.project_id).scenarios[state.scenario_id]
         return next((s.input for s in sc.steps if s.use == "tts" and s.input), None)
+
+    def _preview_kb(self, state: RunState, tab: str):
+        pending = review_pending(state.validation, self.pipeline.is_reviewed(state))
+        return render.preview_keyboard(
+            state, tab, self.pipeline.main_text_step(state) is not None,
+            review_pending=pending, can_recheck=self.pipeline.flagged_step(state) is not None,
+        )
 
     def _run_dir(self, state: RunState) -> Path:
         return self.pipeline.store.run_dir(state.run_id)
@@ -214,7 +222,7 @@ class BotController:
                 await self.ui.answer_callback(callback_id)
                 await self.ui.edit_text(chat_id, message_id, "Отменено.")
                 return
-            await self._run_callback(chat_id, callback_id, action, rest, message_id)
+            await self._run_callback(chat_id, user_id, callback_id, action, rest, message_id)
         except PipelineError as e:
             await self.ui.send_text(chat_id, f"⛔ {e}")
         except Exception as e:  # never kill the bot on one bad update
@@ -223,7 +231,7 @@ class BotController:
 
     # ------------------------------------------------------------------ run callbacks
 
-    async def _run_callback(self, chat_id: int, callback_id: str, action: str, rest: str, message_id: int) -> None:
+    async def _run_callback(self, chat_id: int, user_id: int, callback_id: str, action: str, rest: str, message_id: int) -> None:
         run_id, _, arg = rest.partition(":")
         state = self.pipeline.store.load(run_id)
         project = self.registry.project(state.project_id)
@@ -317,15 +325,33 @@ class BotController:
                 if state.validation.errors:
                     await self.ui.send_text(chat_id, "⛔ Нельзя подтвердить, пока есть ошибки:\n" + "\n".join(state.validation.errors))
                     return
-                state = await self.pipeline.approve(state)
+                if review_pending(state.validation, self.pipeline.is_reviewed(state)):
+                    await self.ui.send_text(chat_id, "🔎 Сначала нужна проверка: " + "; ".join(state.validation.needs_review))
+                    await self._refresh_card(chat_id, state)
+                    return
+                state = await self.pipeline.approve(state, by=user_id)
                 await self._report_approved(chat_id, state)
                 await self._refresh_card(chat_id, state)
+        elif action == "rv":
+            state = self.pipeline.mark_reviewed(state, by=user_id)
+            await self._refresh_card(chat_id, state)
+            await self.ui.send_text(chat_id, "🔎 Проверка отмечена и записана в журнал. Теперь можно подтвердить.")
+        elif action == "rs":
+            step_id = self.pipeline.flagged_step(state)
+            if step_id is None:
+                return
+            async with lock:
+                before = dict(state.artifacts)
+                progress = await self.ui.send_text(chat_id, "⏳ Перепроверяю…")
+                state = await self.pipeline.regenerate_step(state, step_id)
+                await self.ui.edit_text(chat_id, progress, "✅ Готово" if state.status == "ready" else f"⛔ {state.error}")
+                await self._send_update(chat_id, state, before)
         elif action == "d":
-            state = self.pipeline.save_draft(state)
+            state = self.pipeline.save_draft(state, by=user_id)
             await self._refresh_card(chat_id, state, message_id)
             await self.ui.send_text(chat_id, "💾 Сохранено в черновики. Открыть позже: /drafts")
         elif action == "c":
-            state = self.pipeline.cancel(state)
+            state = self.pipeline.cancel(state, by=user_id)
             if message_id in self.session(chat_id).cards.values():
                 await self._refresh_card(chat_id, state, message_id)
             else:
@@ -367,7 +393,7 @@ class BotController:
         await self.ui.edit_text(chat_id, progress, "✅ Готово — превью ниже")
         await self._send_preview(chat_id, state)
         if state.decision == "publish":  # auto mode and every check passed
-            state = await self.pipeline.approve(state)
+            state = await self.pipeline.approve(state, by="auto")
             await self._report_approved(chat_id, state, auto=True)
             await self._refresh_card(chat_id, state)
 
@@ -403,7 +429,7 @@ class BotController:
         msg = await self.ui.send_text(
             chat_id,
             render.preview_card(project, state, tab),
-            render.preview_keyboard(state, tab, self.pipeline.main_text_step(state) is not None),
+            self._preview_kb(state, tab),
             html=True,
         )
         sess.cards[state.run_id] = msg
@@ -432,7 +458,7 @@ class BotController:
             chat_id,
             message_id,
             render.preview_card(project, state, tab),
-            render.preview_keyboard(state, tab, self.pipeline.main_text_step(state) is not None),
+            self._preview_kb(state, tab),
             html=True,
         )
 

@@ -65,7 +65,8 @@ def render_preview(project: Project, state: RunState, run_dir: Path) -> Path:
     out.append("<h2>Проверки</h2><div class='card'>")
     if not (v.errors or v.block_auto or v.warnings):
         out.append("<span class='ok'>Всё в порядке</span>")
-    for cls, title, items in (("err", "Блокирует публикацию", v.errors), ("warn", "Требует подтверждения", v.block_auto), ("muted", "Предупреждения", v.warnings)):
+    for cls, title, items in (("err", "Блокирует публикацию", v.errors), ("err", "Нужна ручная проверка (подтверждение заблокировано)", v.needs_review),
+                              ("warn", "Требует подтверждения", v.block_auto), ("muted", "Предупреждения", v.warnings)):
         if items:
             out.append(f"<b class='{cls}'>{title}</b><ul>" + "".join(f"<li>{_e(i)}</li>" for i in items) + "</ul>")
     out.append("</div>")

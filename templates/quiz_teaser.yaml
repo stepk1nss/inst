@@ -54,10 +54,11 @@ checks:
     options_field: options
     index_field: correct_index
     judge: true
-  - type: block_auto_if
+  - type: require_review_if
     field: uncertain
     equals: true
-    message: "Модель не уверена в ответе — проверьте перед публикацией"
+    message: "Модель не уверена в ответе — проверьте ответ перед подтверждением"
+    review_button: "✅ Я проверил ответ"
 
 platform_defaults:
   telegram:
