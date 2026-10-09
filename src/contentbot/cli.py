@@ -103,6 +103,9 @@ async def _amain(args: argparse.Namespace) -> int:
         await run_bot(settings, fixtures)
         return 0
 
+    if args.cmd == "e2e":
+        return await _e2e(args, settings, registry)
+
     store = RunStore(settings.data_dir)
     mock_path: Path | None = Path(args.mock) if getattr(args, "mock", None) else None
     state: RunState | None = None
@@ -172,11 +175,61 @@ async def _amain(args: argparse.Namespace) -> int:
     return 0 if state.status == "ready" else 1
 
 
+async def _e2e(args: argparse.Namespace, settings, registry) -> int:
+    from .bot.app import build_pipeline
+    from .e2e import redact, run_checks, write_report
+
+    real = settings.llm_provider == "anthropic" and settings.tts_provider == "elevenlabs"
+    if not real and not args.allow_mock:
+        print(
+            "Реальный прогон требует ключей: ANTHROPIC_API_KEY и ELEVENLABS_API_KEY (в .env или окружении).\n"
+            f"Сейчас: LLM={settings.llm_provider}, TTS={settings.tts_provider}. "
+            "Самопроверка инструмента на заглушках: --allow-mock (это НЕ результат реального прогона)."
+        )
+        return 2
+    if real:
+        project = registry.project(args.project)
+        voice = project.voice.get(args.voice or project.voice.default or "")
+        if not (voice and voice.provider_voice_id) and not registry.system.tts.fallback_voice_id:
+            print("Не задан голос ElevenLabs: укажите ID голоса проекта (например VOICE_BATRAKAN) или ELEVENLABS_FALLBACK_VOICE_ID.")
+            return 2
+    if not settings.ffmpeg:
+        print("Нужен FFmpeg для озвучки и видео.")
+        return 2
+    fixtures = load_mock_fixtures(Path(args.mock)) if args.mock and not real else None
+    pipeline = build_pipeline(settings, fixtures)
+    params = {"voice_id": args.voice} if args.voice else {}
+    state = await pipeline.create_run(args.project, [Path(m) for m in args.media], args.caption or "", args.scenario, params)
+    print(f"сценарий: {state.scenario_id} ({state.scenario_how}); генерация…")
+    state = await pipeline.generate(state)
+    run_dir = pipeline.store.run_dir(state.run_id)
+    providers = f"LLM={settings.llm_provider}, TTS={settings.tts_provider}" + ("" if real else " — ЗАГЛУШКИ, не реальный прогон")
+    if state.status != "ready":
+        print(redact(f"⛔ генерация не удалась: {state.error}"))
+        return 1
+    render_preview(pipeline.registry.project(state.project_id), state, run_dir)
+    checks = run_checks(pipeline, state)
+    report = write_report(pipeline, state, checks, providers)
+    for c in checks:
+        print(redact(f"{'✅' if c.ok else '❌'} {c.name}" + (f" — {c.detail}" if c.detail and not c.ok else "")))
+    print(f"отчёт: {report}\nпревью: {run_dir / 'preview.html'}")
+    return 0 if all(c.ok for c in checks) else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="contentbot", description="Контент-конвейер: dev/test CLI")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check", help="проверить конфигурацию всех проектов")
     sub.add_parser("projects", help="список проектов и сценариев")
+
+    x = sub.add_parser("e2e", help="M2.5: полный прогон на реальных AI с проверками секретности (без публикации)")
+    x.add_argument("--project", required=True)
+    x.add_argument("--scenario")
+    x.add_argument("--media", required=True, nargs="+")
+    x.add_argument("--caption")
+    x.add_argument("--voice")
+    x.add_argument("--allow-mock", action="store_true", help="самопроверка инструмента на заглушках")
+    x.add_argument("--mock", help="файл mock-ответов (только с --allow-mock)")
 
     b = sub.add_parser("bot", help="запустить Telegram-бота (нужен TELEGRAM_BOT_TOKEN)")
     b.add_argument("--mock", help="файл с ответами mock-LLM (dev)")
