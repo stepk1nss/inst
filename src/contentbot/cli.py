@@ -9,12 +9,16 @@
     python -m contentbot regen <run_id> <step_id>
     python -m contentbot scenario <run_id> <scenario_id>
     python -m contentbot publish <run_id>          # dev: dry run only
+    python -m contentbot chat [--mock file.yaml]   # the bot flow in the terminal, no Telegram
+    python -m contentbot bot                       # Telegram bot (TELEGRAM_BOT_TOKEN)
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
+import os
 import sys
 from pathlib import Path
 
@@ -69,6 +73,34 @@ async def _amain(args: argparse.Namespace) -> int:
     if args.cmd == "projects":
         for p in registry.projects.values():
             print(f"{p.label} [{p.id}] — {', '.join(f'{s.title} ({s.id})' for s in p.scenarios.values())}")
+        return 0
+
+    if args.cmd in ("bot", "chat"):
+        fixtures = load_mock_fixtures(Path(args.mock)) if args.mock and settings.llm_provider == "mock" else None
+        if args.cmd == "chat":
+            from .bot.console import run_console
+
+            await run_console(settings, fixtures, args.media)
+            return 0
+        if not os.environ.get("TELEGRAM_BOT_TOKEN"):
+            print(
+                "TELEGRAM_BOT_TOKEN не задан — Telegram-бот не запущен.\n"
+                "Локальный конвейер работает и без него: `contentbot demo`, `contentbot run ...`, "
+                "а весь сценарий бота можно пройти в симуляторе: `contentbot chat`."
+            )
+            return 2
+        try:
+            from .bot.telegram import run_bot
+        except ImportError:
+            print("Не установлен aiogram: pip install -e '.[bot]'")
+            return 2
+        from .bot.app import owner_ids_from_env
+
+        if not owner_ids_from_env():
+            print("OWNER_TELEGRAM_IDS пуст: бот будет отвечать всем «нет доступа» и показывать их ID. "
+                  "Напишите боту, возьмите свой ID из ответа и добавьте в .env.")
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        await run_bot(settings, fixtures)
         return 0
 
     store = RunStore(settings.data_dir)
@@ -145,6 +177,12 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check", help="проверить конфигурацию всех проектов")
     sub.add_parser("projects", help="список проектов и сценариев")
+
+    b = sub.add_parser("bot", help="запустить Telegram-бота (нужен TELEGRAM_BOT_TOKEN)")
+    b.add_argument("--mock", help="файл с ответами mock-LLM (dev)")
+    c = sub.add_parser("chat", help="симулятор бота в терминале (без Telegram)")
+    c.add_argument("--mock", help="файл с ответами mock-LLM (dev)")
+    c.add_argument("--media", nargs="*", help="сразу отправить материал")
 
     d = sub.add_parser("demo", help="демо-прогон по examples/dev/demo.yaml (без ключей)")
     d.add_argument("--mock", help="файл с ответами mock-LLM")

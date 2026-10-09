@@ -131,3 +131,36 @@ class GenerateStep:
                     result.fields[name] = ""
                     result.warnings.append(f"поле '{name}' не найдено в подписи — оставлено пустым (выдумывать запрещено)")
         return result
+
+
+async def revise_generate(ctx: StepContext, current: dict[str, Any], instruction: str) -> dict[str, Any]:
+    """Rewrite this step's current output by the author's instruction.
+
+    Uses the same allowed inputs as the step (the core already filtered
+    secrets and removed media), plus the current output. Returns all fields
+    of the step.
+    """
+    assert_no_secrets(ctx.scenario, ctx.step, ctx.view)
+    schema = build_output_schema(ctx.step.produces, ctx.project, ctx.scenario)
+    system = build_system_prompt(ctx) + (
+        "\n\n## Правка\nАвтор просит изменить результат. Сохрани всё, что не затронуто указанием, "
+        "и соблюдай те же правила (в том числе запреты из задачи шага)."
+    )
+    content, _ = build_user_content(ctx)
+    content.append(
+        TextPart(
+            "Текущий результат:\n" + json.dumps(current, ensure_ascii=False, indent=2)
+            + f"\n\nУказание автора: {instruction.strip()}"
+        )
+    )
+    data = await ctx.services.llm.generate_json(
+        purpose=f"{ctx.scenario.id}.{ctx.step.id}.revise",
+        role="generate",
+        system=system,
+        content=content,
+        schema=schema,
+    )
+    missing = [k for k in ctx.step.produces if k not in data]
+    if missing:
+        raise StepError(f"model did not return fields: {', '.join(missing)}")
+    return {k: data[k] for k in ctx.step.produces}

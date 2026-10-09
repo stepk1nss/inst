@@ -71,3 +71,62 @@ async def render_wrapper(image: Path, audio: Path, out: Path, cfg: RenderConfig)
     finally:
         frame.unlink(missing_ok=True)
     return out
+
+
+VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
+
+
+def is_video(path: Path) -> bool:
+    return path.suffix.lower() in VIDEO_SUFFIXES
+
+
+async def has_audio(path: Path) -> bool:
+    out = await _run(
+        "ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", str(path)
+    )
+    return bool(out.strip())
+
+
+async def extract_frames(video: Path, out_dir: Path, count: int = 2) -> list[Path]:
+    """Frames for analysis (the LLM gets images, not video): evenly spread, skipping the very start."""
+    duration = await media_duration(video)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    frames = []
+    for i in range(count):
+        t = duration * (0.15 + 0.7 * i / max(1, count - 1)) if count > 1 else duration * 0.3
+        dst = out_dir / f"frame_{i}.jpg"
+        await _run("ffmpeg", "-y", "-loglevel", "error", "-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1", "-q:v", "3", str(dst))
+        frames.append(dst)
+    return frames
+
+
+async def render_over_video(video: Path, audio: Path, out: Path, cfg: RenderConfig, original_volume: float = 0.25) -> Path:
+    """Source video fitted into 9:16 (blurred fill) + voiceover mixed over the original sound."""
+    w, h, fps = cfg.width, cfg.height, cfg.fps
+    vdur = await media_duration(video)
+    adur = await media_duration(audio) + cfg.tail_seconds
+    extend = max(0.0, adur - vdur)
+    total = max(vdur, adur)
+    video_graph = (
+        f"[0:v]split[a][b];"
+        f"[a]scale={w // 4}:{h // 4}:force_original_aspect_ratio=increase,crop={w // 4}:{h // 4},boxblur=10:2,scale={w}:{h}[bg];"
+        f"[b]scale={w}:{h}:force_original_aspect_ratio=decrease[fg];"
+        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,tpad=stop_mode=clone:stop_duration={extend:.3f},fps={fps},setsar=1,format=yuv420p[v]"
+    )
+    if await has_audio(video):
+        audio_graph = (
+            f"[0:a]volume={original_volume}[a0];[1:a]adelay=200:all=1[a1];"
+            f"[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[aout]"
+        )
+    else:
+        audio_graph = "[1:a]adelay=200:all=1[aout]"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    await _run(
+        "ffmpeg", "-y", "-loglevel", "error", "-i", str(video), "-i", str(audio),
+        "-filter_complex", f"{video_graph};{audio_graph}",
+        "-map", "[v]", "-map", "[aout]",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+        "-c:a", "aac", "-b:a", "128k", "-t", f"{total:.3f}", "-movflags", "+faststart",
+        str(out),
+    )
+    return out

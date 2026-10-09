@@ -43,7 +43,9 @@ def merge_hashtags(fixed: list[str], generated: list[str], limit: int) -> list[s
 def compose_posts(project: Project, scenario: Scenario, state: RunState, run_dir: Path) -> dict[str, PlatformPost]:
     posts: dict[str, PlatformPost] = {}
     image = state.media[0].path if state.media else None
-    video = state.artifacts.get("video")
+    source_video = state.source_video.path if state.source_video else None
+    # video material: the voiced version if built, else the original clip
+    video = state.artifacts.get("video") or source_video
 
     for pname, target in project.enabled_platforms().items():
         pd = scenario.platform_defaults[pname]
@@ -80,7 +82,9 @@ def compose_posts(project: Project, scenario: Scenario, state: RunState, run_dir
             warnings.append("текст изменён вручную")
 
         media_kind, media_path = None, None
-        if target.wants_video:
+        if source_video and video:  # the material is a video: every platform gets the video
+            media_kind, media_path = "video", video
+        elif target.wants_video:
             if video:
                 media_kind, media_path = "video", video
             elif caps.requires_video:

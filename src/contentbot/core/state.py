@@ -64,7 +64,8 @@ class RunState(BaseModel):
     scenario_how: str = ""  # tag | single | auto | default | manual
     created_at: str
     caption: str = ""
-    media: list[MediaItem] = Field(default_factory=list)
+    media: list[MediaItem] = Field(default_factory=list)  # images the steps may see (for video: extracted frames)
+    source_video: MediaItem | None = None  # original video when the material is a video
     params: dict[str, Any] = Field(default_factory=dict)  # voice_id, speed, mode
     field_overrides: dict[str, Any] = Field(default_factory=dict)
     post_overrides: dict[str, str] = Field(default_factory=dict)  # platform -> final text
@@ -77,6 +78,8 @@ class RunState(BaseModel):
     decision: str = ""  # draft | await_confirm | publish
     llm_calls: list[dict[str, Any]] = Field(default_factory=list)
     judge_cache: dict[str, list[str]] = Field(default_factory=dict)  # hash(secrets+texts) -> findings
+    publish_results: list[dict[str, Any]] = Field(default_factory=list)
+    # new | scenario_selected | generating | ready | failed | draft | approved | cancelled
     status: str = "new"
     error: str | None = None
 

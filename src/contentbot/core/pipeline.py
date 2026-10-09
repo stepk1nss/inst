@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,11 +18,14 @@ from typing import Any
 from ..config.loader import ConfigRegistry
 from ..config.schema import Project, Scenario
 from ..media.image import normalize_image, sha256_file
+from ..media.video import VideoError, extract_frames, is_video
 from ..steps import STEP_TYPES
 from ..steps.base import StepContext, StepError
+from ..steps.generate import revise_generate
 from .classify import select_scenario
-from .compose import compose_posts
 from ..llm.base import LLMError
+from ..publishers.base import publish_posts
+from .compose import compose_posts
 from .context import SecretIsolationError, build_view
 from .modes import decide
 from .services import Services
@@ -68,11 +72,7 @@ class Pipeline:
             params=dict(params or {}),
         )
         run_dir = self.store.run_dir(state.run_id)
-        img = self.services.system.image
-        for i, src in enumerate(media_paths):
-            rel = f"media/source_{i}.jpg"
-            normalize_image(src, run_dir / rel, img.max_side, img.jpeg_quality)
-            state.media.append(MediaItem(path=rel, sha256=sha256_file(run_dir / rel)))
+        await self._ingest(state, run_dir, media_paths)
 
         if scenario_id:
             if scenario_id not in project.scenarios:
@@ -86,6 +86,36 @@ class Pipeline:
         state.status = "scenario_selected"
         self.store.save(state)
         return state
+
+    async def _ingest(self, state: RunState, run_dir: Path, media_paths: list[Path]) -> None:
+        if not media_paths:
+            raise PipelineError("нет материала: пришлите фото или видео")
+        img = self.services.system.image
+        videos = [p for p in media_paths if is_video(p)]
+        if videos:
+            if not self.services.ffmpeg:
+                raise PipelineError("видео не поддерживается без FFmpeg")
+            src = videos[0]
+            rel = f"media/source_video{src.suffix.lower()}"
+            (run_dir / "media").mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, run_dir / rel)
+            state.source_video = MediaItem(path=rel, sha256=sha256_file(run_dir / rel), kind="video")
+            try:
+                frames = await extract_frames(run_dir / rel, run_dir / "media" / "frames")
+            except VideoError as e:
+                raise PipelineError(f"не удалось прочитать видео: {e}") from e
+            sources = frames
+            if len(media_paths) > 1:
+                state.params["ingest_note"] = "в посте используется только первое видео"
+        else:
+            sources = media_paths
+        for i, src in enumerate(sources):
+            rel = f"media/source_{i}.jpg"
+            try:
+                normalize_image(src, run_dir / rel, img.max_side, img.jpeg_quality)
+            except OSError as e:
+                raise PipelineError(f"не удалось открыть изображение {src.name}: {e}") from e
+            state.media.append(MediaItem(path=rel, sha256=sha256_file(run_dir / rel)))
 
     def set_scenario(self, state: RunState, scenario_id: str) -> RunState:
         project = self.registry.project(state.project_id)
@@ -202,6 +232,75 @@ class Pipeline:
         for name in scenario.step(step_id).produces:
             state.field_overrides.pop(name, None)
         return await self.generate(state)
+
+
+    async def revise_step(self, state: RunState, step_id: str, instruction: str) -> RunState:
+        """Rewrite a generate step's output by the author's instruction.
+
+        The material is NOT analysed again: the model gets only the step's
+        allowed input fields (secrets stay filtered) and its current output.
+        The result is stored as overrides; downstream steps re-run as needed.
+        """
+        project = self.registry.project(state.project_id)
+        scenario = project.scenarios[state.scenario_id]
+        step = scenario.step(step_id)
+        if step.use != "generate":
+            raise PipelineError(f"шаг '{step_id}' нельзя переписать текстом")
+        if not instruction.strip():
+            raise PipelineError("пустое указание для правки")
+        run_dir = self.store.run_dir(state.run_id)
+        view = build_view(scenario, step, state, run_dir)
+        view.media = []  # no re-analysis of the image
+        ctx = StepContext(project, scenario, step, view, state, self.services, run_dir)
+        current = {name: state.fields.get(name) for name in step.produces}
+        llm_calls_before = len(self.services.llm.calls)
+        try:
+            data = await revise_generate(ctx, current, instruction)
+        except (StepError, LLMError) as e:
+            raise PipelineError(f"правка не удалась: {e}") from e
+        except SecretIsolationError as e:
+            raise PipelineError(f"НАРУШЕНИЕ ИЗОЛЯЦИИ СЕКРЕТОВ: {e}") from e
+        finally:
+            for call in self.services.llm.calls[llm_calls_before:]:
+                state.llm_calls.append({"purpose": call.purpose, "model": call.model, "in": call.input_tokens, "out": call.output_tokens})
+        for name, value in data.items():
+            state.field_overrides[name] = value
+        return await self.generate(state)
+
+    def main_text_step(self, state: RunState) -> str | None:
+        """The step that writes the platform texts (target of 'rewrite' / 'regenerate')."""
+        scenario = self.registry.project(state.project_id).scenarios[state.scenario_id]
+        candidates = [s for s in scenario.steps if s.use == "generate"]
+        for s in candidates:
+            if any(scenario.fields[f].type == "platform_texts" for f in s.produces):
+                return s.id
+        return candidates[-1].id if candidates else None
+
+    # ------------------------------------------------------------------ decisions
+
+    async def approve(self, state: RunState, platforms: list[str] | None = None) -> RunState:
+        """User confirmation. Real publishing is not connected yet: posts go to a dry-run outbox."""
+        if state.status not in ("ready", "draft"):
+            raise PipelineError("пост ещё не готов")
+        if state.validation.errors:
+            raise PipelineError("есть ошибки, публикация невозможна:\n" + "\n".join(state.validation.errors))
+        results = await publish_posts(state.posts, self.store.run_dir(state.run_id), platforms)
+        state.publish_results = [r.__dict__ for r in results]
+        state.status = "approved"
+        self.store.save(state)
+        return state
+
+    def save_draft(self, state: RunState) -> RunState:
+        if state.status not in ("ready", "draft"):
+            raise PipelineError("черновик можно сохранить только у готового поста")
+        state.status = "draft"
+        self.store.save(state)
+        return state
+
+    def cancel(self, state: RunState) -> RunState:
+        state.status = "cancelled"
+        self.store.save(state)
+        return state
 
 
 def summarize_llm_usage(state: RunState) -> dict[str, int]:
