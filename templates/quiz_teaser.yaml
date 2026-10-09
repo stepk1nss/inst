@@ -1,0 +1,76 @@
+# Reusable scenario template: "teaser without the answer" on public platforms,
+# full reveal (answer + explanation) only on platforms with reveal_secrets: true.
+# Knows nothing about traffic rules — projects specialise it via overrides.
+
+id: quiz_teaser
+description: Вопрос-тизер без ответа в соцсетях + полное раскрытие там, где reveal_secrets
+
+fields:
+  question:      {type: string,  desc: "Вопрос дословно или максимально близко к источнику"}
+  options:       {type: array, items: string, desc: "Варианты ответа дословно, в исходном порядке (пустой список, если вариантов нет)"}
+  situation:     {type: string,  desc: "Нейтральное описание ситуации на материале без подсказок к ответу"}
+  correct:       {type: string,  secret: true, desc: "Правильный ответ (текст варианта)"}
+  correct_index: {type: integer, secret: true, desc: "Номер правильного варианта, начиная с 1 (0, если вариантов нет)"}
+  explanation:   {type: string,  secret: true, desc: "Объяснение, почему ответ правильный"}
+  uncertain:     {type: boolean, secret: true, desc: "true, если есть сомнения в правильности ответа"}
+  teaser:        {type: string,  desc: "Короткий хук-вопрос без ответа и без подсказок"}
+  voiceover:     {type: string,  desc: "Текст озвучки на 12–20 секунд, разговорный, без ответа и подсказок"}
+  platform_texts: {type: platform_texts, desc: "Тексты публикаций для площадок без раскрытия ответа"}
+
+steps:
+  - id: extract
+    use: generate
+    sees: {media: true, caption: true}
+    produces: [question, options, situation]
+    instructions: |
+      Перенеси вопрос и варианты ответа с материала. НЕ решай задачу, не оценивай варианты,
+      не выделяй ни один из них. Описание ситуации — нейтральное, без подсказок.
+
+  - id: solve
+    use: generate
+    sees: {media: true, fields: [question, options], secrets: true}
+    produces: [correct, correct_index, explanation, uncertain]
+    instructions: |
+      Реши задачу и объясни ответ. Если есть хоть какие-то сомнения — uncertain: true.
+
+  - id: teaser
+    use: generate
+    sees: {media: false, fields: [question, situation]}
+    produces: [teaser, voiceover, platform_texts]
+    instructions: |
+      Напиши тизер, текст озвучки и тексты для площадок. Цель — вовлечь зрителя ответить самому.
+      Не давай ответ и не намекай на него.
+
+  - id: tts
+    use: tts
+    input: voiceover
+
+  - id: video
+    use: render_video
+
+checks:
+  - type: no_secret_leak
+    secrets: [correct, explanation]
+    options_field: options
+    index_field: correct_index
+    judge: true
+  - type: block_auto_if
+    field: uncertain
+    equals: true
+    message: "Модель не уверена в ответе — проверьте перед публикацией"
+
+platform_defaults:
+  telegram:
+    reveal_secrets: true
+    template: |
+      {{ teaser }}
+
+      {{ question }}
+      {% for o in options %}{{ loop.index }}) {{ o }}
+      {% endfor %}
+      ✅ Правильный ответ: <tg-spoiler>{{ correct }}</tg-spoiler>
+
+      <tg-spoiler>{{ explanation }}</tg-spoiler>
+  instagram: {reveal_secrets: false, text_from: platform_texts.instagram}
+  tiktok:    {reveal_secrets: false, text_from: platform_texts.tiktok}
+  youtube:   {reveal_secrets: false, text_from: platform_texts.youtube}

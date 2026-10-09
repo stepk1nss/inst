@@ -1,0 +1,81 @@
+id: zazerkalye
+name: Зазеркалье
+emoji: "🪞"
+tag: "#зазеркалье"
+language: ru
+commercial: false
+
+brand:
+  file: prompts/brand.md
+  examples_dir: examples
+
+knowledge:
+  files: [prompts/characters.md]
+
+voice:
+  enabled: true
+  default: batrakan
+  speed: 1.0
+  # Voice IDs are NOT final: change them in .env (or here) at any time.
+  # Empty provider_voice_id -> system fallback (temporary) voice.
+  allowed:
+    - {id: batrakan, name: "Батракан", provider_voice_id: "${VOICE_BATRAKAN:-}", note: "временно: голос не выбран"}
+    - {id: pedal,    name: "Педаль",   provider_voice_id: "${VOICE_PEDAL:-}",    note: "временно: голос не выбран"}
+    - {id: neutral,  name: "Нейтральный", provider_voice_id: "${VOICE_NEUTRAL:-}"}
+
+platforms:
+  telegram:  {connection: tg_zazerkalye, format: photo, hashtags_fixed: ["#зазеркалье"]}
+  instagram: {connection: ig_zazerkalye, format: reels, hashtags_fixed: ["#зазеркалье", "#пдд"]}
+  # Until the TikTok Content Posting API audit: drafts only (MEDIA_UPLOAD)
+  tiktok:    {connection: tt_zazerkalye, format: video, mode: draft, hashtags_fixed: ["#пдд"]}
+  # Until the YouTube API audit uploads are forced private by YouTube
+  youtube:   {connection: yt_zazerkalye, format: shorts, visibility: private, hashtags_fixed: ["#пдд", "#shorts"]}
+
+publishing:
+  mode: confirm   # draft | confirm | auto
+
+scenario_selection: {auto: true, default: pdd_ticket}
+
+scenarios:
+  - id: pdd_ticket
+    extends: quiz_teaser
+    title: "🎫 Билет ПДД"
+    tag: "#пдд"
+    when: "Билет ПДД, экзаменационный вопрос или дорожная ситуация с вопросом и вариантами ответа"
+    knowledge: [prompts/pdd_rules.md]
+    overrides:
+      fields:
+        rule_ref: {type: string, secret: true, desc: "Пункт ПДД РФ, на котором основан ответ (номер и короткая формулировка)"}
+      steps:
+        solve:
+          produces: [correct, correct_index, explanation, rule_ref, uncertain]
+          instructions: |
+            Ответ строго по ПДД РФ. Укажи пункт ПДД в rule_ref.
+            Объяснение — понятное, в стиле проекта, 2–5 предложений.
+            Если ситуация неоднозначна или билет читается плохо — uncertain: true.
+        teaser:
+          instructions: |
+            Тизер мемный, в стиле проекта. Ответ не раскрывать и не намекать на него.
+            Призыв: ответить в комментариях / проверить себя; правильный ответ — в нашем Telegram.
+      platforms:
+        telegram:
+          reveal_secrets: true
+          template: |
+            {{ teaser }}
+
+            {{ question }}
+            {% for o in options %}{{ loop.index }}) {{ o }}
+            {% endfor %}
+            ✅ Правильный ответ: <tg-spoiler>{{ correct }}</tg-spoiler>
+
+            <tg-spoiler>{{ explanation }}
+
+            📖 {{ rule_ref }}</tg-spoiler>
+    checks_add:
+      - type: no_secret_leak
+        secrets: [rule_ref]
+        judge: false
+
+  - id: simple
+    extends: simple_post
+    title: "📝 Обычный пост"

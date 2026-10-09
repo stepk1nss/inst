@@ -1,0 +1,41 @@
+id: spb
+name: Петербург
+emoji: "🏙"
+tag: "#питер"
+language: ru
+commercial: false
+
+brand:
+  file: prompts/brand.md
+
+voice:
+  enabled: true
+  default: anna
+  allowed:
+    - {id: anna, name: "Анна", provider_voice_id: "${VOICE_ANNA:-}"}
+
+platforms:
+  telegram:  {connection: tg_spb, format: photo}
+  instagram: {connection: ig_spb, format: photo, hashtags_fixed: ["#петербург", "#спб"]}
+  tiktok:    {connection: tt_spb, format: video, mode: draft}
+
+publishing:
+  mode: confirm
+
+scenario_selection: {auto: true, default: simple}
+
+scenarios:
+  - id: venue
+    extends: place
+    title: "☕ Заведение"
+    when: "Кафе, бар, ресторан, магазин или другое заведение"
+  - id: building
+    extends: place
+    title: "🏛 Здание"
+    when: "Здание, памятник архитектуры, достопримечательность"
+    overrides:
+      fields:
+        hours: {type: string, source: caption, desc: "Часы работы (если это музей и они есть в подписи)"}
+  - id: simple
+    extends: simple_post
+    title: "📝 Обычный пост"

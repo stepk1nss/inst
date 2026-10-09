@@ -1,0 +1,30 @@
+# Default scenario template for any project: description + hashtags + CTA + voiceover.
+
+id: simple_post
+description: Обычный пост — описание, хэштеги, призыв к действию, озвучка
+
+fields:
+  topic:     {type: string, desc: "О чём материал, одной фразой"}
+  voiceover: {type: string, desc: "Текст озвучки на 10–20 секунд"}
+  platform_texts: {type: platform_texts, desc: "Тексты публикаций для каждой площадки"}
+
+steps:
+  - id: write
+    use: generate
+    sees: {media: true, caption: true}
+    produces: [topic, voiceover, platform_texts]
+
+  - id: tts
+    use: tts
+    input: voiceover
+
+  - id: video
+    use: render_video
+
+checks: []
+
+platform_defaults:
+  telegram:  {reveal_secrets: false, text_from: platform_texts.telegram}
+  instagram: {reveal_secrets: false, text_from: platform_texts.instagram}
+  tiktok:    {reveal_secrets: false, text_from: platform_texts.tiktok}
+  youtube:   {reveal_secrets: false, text_from: platform_texts.youtube}

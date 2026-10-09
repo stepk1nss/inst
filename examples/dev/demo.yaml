@@ -1,0 +1,7 @@
+# What `python -m contentbot demo` runs. The core does not know about any project:
+# the demo is just data.
+project: zazerkalye
+scenario: null            # null = auto-detect (mock answers in the fixtures file)
+caption: ""
+mock: pdd_demo.mock.yaml  # relative to this file; used only with the mock LLM
+image: generated_ticket   # synthetic test ticket drawn by contentbot.demo

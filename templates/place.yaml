@@ -1,0 +1,43 @@
+# Reusable scenario template: a place (venue, building, landmark) from a photo.
+# Address / opening hours are NOT invented: in MVP they come only from the user's caption.
+# Later: source: enrich.<provider> (maps, web search) without core changes.
+
+id: place
+description: Место или заведение по фото — описание, факты, адрес и часы (только из подписи)
+
+fields:
+  subject:   {type: string, desc: "Что это за место (тип и, если явно видно или указано, название)"}
+  facts:     {type: array, items: string, desc: "2–3 интересных факта; только то, в чём ты уверен"}
+  address:   {type: string, source: caption, desc: "Адрес — только если он есть в подписи"}
+  hours:     {type: string, source: caption, desc: "Часы работы — только если они есть в подписи"}
+  hook:      {type: string, desc: "Первая цепляющая фраза"}
+  voiceover: {type: string, desc: "Текст озвучки на 12–20 секунд"}
+  platform_texts: {type: platform_texts, desc: "Тексты публикаций для каждой площадки"}
+
+steps:
+  - id: describe
+    use: generate
+    sees: {media: true, caption: true}
+    produces: [subject, facts, address, hours]
+
+  - id: write
+    use: generate
+    sees: {media: true, fields: [subject, facts, address, hours]}
+    produces: [hook, voiceover, platform_texts]
+    instructions: |
+      Если адрес или часы указаны — включи их в тексты площадок. Если пусто — не упоминай.
+
+  - id: tts
+    use: tts
+    input: voiceover
+
+  - id: video
+    use: render_video
+
+checks: []
+
+platform_defaults:
+  telegram:  {reveal_secrets: false, text_from: platform_texts.telegram}
+  instagram: {reveal_secrets: false, text_from: platform_texts.instagram}
+  tiktok:    {reveal_secrets: false, text_from: platform_texts.tiktok}
+  youtube:   {reveal_secrets: false, text_from: platform_texts.youtube}

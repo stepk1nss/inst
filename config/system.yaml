@@ -1,0 +1,26 @@
+# Global, non-secret settings shared by all projects.
+# Secrets live in .env and are referenced as ${VAR} / ${VAR:-default}.
+
+timezone: Europe/Moscow
+
+models:
+  generate: {model: claude-opus-5-5, effort: medium, max_tokens: 16000}
+  classify: {model: claude-haiku-5-5, effort: low, max_tokens: 1024}
+  judge: {model: claude-haiku-5-5, effort: low, max_tokens: 1024}
+
+tts:
+  model: eleven_multilingual_v2
+  # Used when a project voice has no provider ID yet (temporary voice for tests)
+  fallback_voice_id: ${ELEVENLABS_FALLBACK_VOICE_ID:-}
+
+render:
+  width: 1080
+  height: 1920
+  fps: 30
+  zoom: 1.06          # slow Ken Burns zoom over the whole clip
+  tail_seconds: 1.0   # silence after the voiceover
+  blur: 40
+
+image:
+  max_side: 2048
+  jpeg_quality: 92
