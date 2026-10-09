@@ -216,16 +216,21 @@ class Pipeline:
             state.params["speed"] = speed
         return await self.generate(state)
 
-    async def edit_field(self, state: RunState, field: str, value: Any) -> RunState:
+    async def edit_field(self, state: RunState, field: str, value: Any, by: str | int = "user") -> RunState:
         scenario = self.registry.project(state.project_id).scenarios[state.scenario_id]
         if field not in scenario.fields:
             raise PipelineError(f"нет поля '{field}' в сценарии '{scenario.id}'")
+        if scenario.fields[field].secret and state.fields.get(field) != value:
+            self._event(state, "answer_changed", by=str(by), field=field, old=state.fields.get(field), new=value)
         state.field_overrides[field] = value
         return await self.generate(state)
 
-    async def edit_post(self, state: RunState, platform: str, text: str) -> RunState:
+    async def edit_post(self, state: RunState, platform: str, text: str, by: str | int = "user") -> RunState:
         if platform not in state.posts:
             raise PipelineError(f"площадка '{platform}' не включена в этом посте")
+        if platform in self._reveal_platforms(state) and state.posts[platform].text != text:
+            # this post shows the answer: a manual edit may change it, so it needs a fresh review
+            self._event(state, "answer_changed", by=str(by), platform=platform, old=state.posts[platform].text, new=text)
         state.post_overrides[platform] = text
         return await self.generate(state)
 
@@ -284,10 +289,19 @@ class Pipeline:
 
     # ------------------------------------------------------------------ manual review
 
-    def review_key(self, state: RunState) -> str:
-        """Fingerprint of what a reviewer vouches for: the secret fields (e.g. the answer)."""
+    def _reveal_platforms(self, state: RunState) -> set[str]:
         scenario = self.registry.project(state.project_id).scenarios[state.scenario_id]
-        return _hash({name: state.fields.get(name) for name in sorted(scenario.secret_fields())})
+        return {p for p, pd in scenario.platform_defaults.items() if pd.reveal_secrets}
+
+    def review_key(self, state: RunState) -> str:
+        """Fingerprint of what a reviewer vouches for: the secret fields (e.g. the answer)
+        and any manual text of the platforms that reveal them (e.g. the Telegram answer post)."""
+        scenario = self.registry.project(state.project_id).scenarios[state.scenario_id]
+        reveal_overrides = {p: t for p, t in sorted(state.post_overrides.items()) if p in self._reveal_platforms(state)}
+        return _hash({
+            "secrets": {name: state.fields.get(name) for name in sorted(scenario.secret_fields())},
+            "reveal_overrides": reveal_overrides,
+        })
 
     def is_reviewed(self, state: RunState) -> bool:
         return state.review is not None and state.review.get("key") == self.review_key(state)

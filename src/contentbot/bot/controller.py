@@ -171,9 +171,9 @@ class BotController:
                 if pending.kind == "post":
                     post = state.posts.get(pending.target)
                     value = (html_text if html_text is not None else html.escape(text, quote=False)) if post and post.html else text
-                    state = await self.pipeline.edit_post(state, pending.target, value)
+                    state = await self.pipeline.edit_post(state, pending.target, value, by=user_id)
                 elif pending.kind == "field":
-                    state = await self.pipeline.edit_field(state, pending.target, text)
+                    state = await self.pipeline.edit_field(state, pending.target, text, by=user_id)
                 elif pending.kind == "revise":
                     state = await self.pipeline.revise_step(state, pending.target, text)
             except PipelineError as e:

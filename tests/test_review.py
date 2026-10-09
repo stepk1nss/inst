@@ -111,3 +111,58 @@ def test_certain_answer_needs_no_review(h, demo_image):
     assert "ok" in buttons and "rv" not in buttons
     with pytest.raises(PipelineError):
         h.pipe.mark_reviewed(st, by=OWNER)
+
+
+def test_manual_edit_of_answer_post_resets_review(tmp_path, demo_image, uncertain):
+    h = Harness(tmp_path, uncertain)
+    st = h.to_preview(demo_image)
+    h.click("rv:")
+    assert h.pipe.can_confirm(h.state())
+
+    # the user rewrites the Telegram post (the one that reveals the answer)
+    h.click("e:")
+    h.click("ep:", "telegram")
+    h.say("Ответ: Синий", html_text="Ответ: <tg-spoiler>Синий автомобиль</tg-spoiler>")
+
+    st = h.state()
+    assert st.review is None
+    assert not h.pipe.can_confirm(st)
+    kinds = [e["type"] for e in st.events]
+    assert kinds[-2:] == ["answer_changed", "review_reset"]
+    change = st.events[-2]
+    assert change["by"] == str(OWNER) and change["platform"] == "telegram"
+    assert "Синий автомобиль" in change["new"]
+    buttons, card = _buttons(h, st.run_id)
+    assert "ok" not in buttons and buttons["rv"].text == "✅ Я проверил ответ"
+    assert "Нужна проверка" in card.text
+
+    # review again -> confirm becomes available -> approve
+    h.click("rv:")
+    buttons, _ = _buttons(h, st.run_id)
+    assert "ok" in buttons
+    h.click("ok:")
+    st = h.state()
+    assert st.status == "approved" and st.events[-1]["manual_review"] is True
+
+
+def test_editing_answer_field_is_journaled(tmp_path, demo_image, uncertain):
+    h = Harness(tmp_path, uncertain)
+    h.to_preview(demo_image)
+    h.click("rv:")
+    st = asyncio.run(h.pipe.edit_field(h.state(), "correct", "Синий автомобиль", by=OWNER))
+    change = next(e for e in st.events if e["type"] == "answer_changed")
+    assert change["field"] == "correct" and change["old"] == "Красный автомобиль" and change["by"] == str(OWNER)
+    assert st.review is None
+
+
+def test_editing_public_post_keeps_review(tmp_path, demo_image, uncertain):
+    h = Harness(tmp_path, uncertain)
+    h.to_preview(demo_image)
+    h.click("rv:")
+    h.click("t:", "instagram")
+    h.click("e:")
+    h.click("ep:", "instagram")
+    h.say("Новый текст для Instagram без ответа")
+    st = h.state()
+    assert st.review is not None and h.pipe.can_confirm(st)
+    assert not any(e["type"] == "answer_changed" for e in st.events)
